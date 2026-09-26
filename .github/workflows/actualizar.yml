@@ -1,0 +1,47 @@
+name: Actualizar ofertas
+
+on:
+  schedule:
+    - cron: "0 11 * * *"   # todos los días a las 6:00 a. m. de Lima
+  workflow_dispatch:        # botón para ejecutarlo a mano
+
+permissions:
+  contents: write
+
+jobs:
+  actualizar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Traer ofertas
+        run: node scripts/actualizar.js
+        env:
+          JOOBLE_PE: ${{ secrets.JOOBLE_PE }}
+          JOOBLE_MX: ${{ secrets.JOOBLE_MX }}
+          JOOBLE_CO: ${{ secrets.JOOBLE_CO }}
+          JOOBLE_CL: ${{ secrets.JOOBLE_CL }}
+          JOOBLE_ES: ${{ secrets.JOOBLE_ES }}
+          JOOBLE_AR: ${{ secrets.JOOBLE_AR }}
+          JOOBLE_EC: ${{ secrets.JOOBLE_EC }}
+          JOOBLE_BO: ${{ secrets.JOOBLE_BO }}
+          JOOBLE_PA: ${{ secrets.JOOBLE_PA }}
+          JOOBLE_CR: ${{ secrets.JOOBLE_CR }}
+          JOOBLE_DO: ${{ secrets.JOOBLE_DO }}
+          JOOBLE_GT: ${{ secrets.JOOBLE_GT }}
+          JOOBLE_UY: ${{ secrets.JOOBLE_UY }}
+          JOOBLE_PY: ${{ secrets.JOOBLE_PY }}
+          JOOBLE_VE: ${{ secrets.JOOBLE_VE }}
+          JOOBLE_HN: ${{ secrets.JOOBLE_HN }}
+          JOOBLE_SV: ${{ secrets.JOOBLE_SV }}
+          JOOBLE_NI: ${{ secrets.JOOBLE_NI }}
+          JOOBLE_PR: ${{ secrets.JOOBLE_PR }}
+          JOOBLE_CU: ${{ secrets.JOOBLE_CU }}
+      - name: Guardar ofertas
+        run: |
+          git config user.name "robot-dsa"
+          git config user.email "robot@dsainstituto.com"
+          git add ofertas.json
+          git diff --staged --quiet || (git commit -m "Ofertas del $(date +%F)" && git push)
