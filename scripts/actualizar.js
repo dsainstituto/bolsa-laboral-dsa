@@ -121,7 +121,7 @@ async function consultar(clave, dominio, palabra, pais, pagina) {
   }
 
   const limite = ahora.getTime() - DIAS_MAXIMO * 864e5;
-  const sinVer = ahora.getTime() - 10 * 864e5; // no apareció en 10 días: se asume cerrada
+  const sinVer = ahora.getTime() - 30 * 864e5; // no apareció en 30 días: se asume cerrada
   const ofertas = [...mapa.values()]
     .filter(o => new Date(o.fecha).getTime() >= limite && new Date(o.visto).getTime() >= sinVer)
     .sort((a, b) => new Date(b.fecha) - new Date(a.fecha))
