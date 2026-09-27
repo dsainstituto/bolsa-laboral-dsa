@@ -90,7 +90,9 @@ async function consultar(clave, dominio, palabra, pais, pagina) {
     const clave = process.env[secreto];
     if (!clave) continue; // país sin clave todavía
     for (const [area, palabras] of Object.entries(AREAS)) {
-     for (const palabra of (PAGINAS === 1 ? palabras.slice(0, 1) : palabras)) {
+     // En modo ahorro, cada día usa una palabra distinta del área (rota), para traer ofertas diferentes
+     const diaDelAnio = Math.floor((ahora - new Date(ahora.getFullYear(), 0, 0)) / 864e5);
+     for (const palabra of (PAGINAS === 1 ? [palabras[diaDelAnio % palabras.length]] : palabras)) {
       for (let pagina = 1; pagina <= PAGINAS; pagina++) {
       try {
         const jobs = await consultar(clave, dominio, palabra, pais, pagina);
@@ -99,13 +101,15 @@ async function consultar(clave, dominio, palabra, pais, pagina) {
           const id = "jb" + j.id;
           const texto = `${j.title} ${j.snippet || ""} ${j.type || ""}`;
           const s = salario(j.salary, moneda, tasa);
-          if (!mapa.has(id)) nuevas++;
+          const previa = mapa.get(id);
+          if (!previa) nuevas++;
           mapa.set(id, {
             id, title: (j.title || "").trim(), area, company: (j.company || "Empresa confidencial").trim(),
             country: pais, city: (j.location || pais).split(",")[0].trim(),
             mode: modalidad(texto), type: tipo(texto), src: j.source || "Jooble",
             link: j.link, snippet: (j.snippet || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim(),
             fecha: j.updated || ahora.toISOString(), visto: ahora.toISOString(),
+            alta: previa ? (previa.alta || previa.visto) : ahora.toISOString(), // día en que entró a la bolsa
             sal: s ? s.sal : null, usdMid: s ? s.usdMid : 0
           });
         }
