@@ -1,6 +1,6 @@
 /* =====================================================================
    MOTOR DE POSTULACIONES DSA
-   Cada jueves a las 3:00 a. m. (Lima), con las ofertas del día
+   Cada miércoles a las 3:30 a. m. (Lima), con las ofertas del día
    (ofertas.json), elige para cada alumno las 20 que más le convienen y
    las deja en su campus (colección postulaciones/{alumnoId}).
 
@@ -32,10 +32,10 @@ function sinTildes(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]
 const VACIAS = new Set(('de del la las el los y e o u en con para por a al un una sus su se que como mas sr jr '
   + 'analista asistente especialista junior senior practicante practicas gestion area').split(' '));
 function palabras(s) { return sinTildes(s).split(/[^a-z0-9+#]+/).filter(w => w.length > 2 && !VACIAS.has(w)); }
-/* inicio de la tanda semanal: jueves 00:00 de Lima (UTC-5), en milisegundos */
+/* inicio de la tanda semanal: miércoles 00:00 de Lima (UTC-5), en milisegundos */
 function lunesLima(ahora) {
   const l = new Date((ahora || Date.now()) - 5 * 3600000);
-  const dow = (l.getUTCDay() + 3) % 7;   /* jueves = 0 */
+  const dow = (l.getUTCDay() + 4) % 7;   /* miércoles = 0 */
   return Date.UTC(l.getUTCFullYear(), l.getUTCMonth(), l.getUTCDate() - dow) + 5 * 3600000;
 }
 function portalDe(src) {
