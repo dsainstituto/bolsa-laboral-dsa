@@ -181,12 +181,14 @@ async function careerjet(mapa, ahora) {
   let ip = "127.0.0.1";
   try { ip = (await (await fetch("https://api.ipify.org")).text()).trim() || ip; } catch (e) {}
   const ua = "DSA-Bolsa-Laboral/1.0 (+https://dsainstituto.com)";
+  /* Careerjet exige el sitio declarado en su panel (dsainstituto.com) como Referer */
+  const referer = process.env.CAREERJET_REFERER || "https://dsainstituto.com/";
   let consultas = 0, nuevas = 0, mostrado = false, fallos = 0;
   for (const [area, palabra] of cjBusquedas(ahora)) {
     try {
       const q = new URLSearchParams({ locale_code: "es_PE", keywords: palabra, location: "Perú", page_size: "50", page: "1",
         sort: "date", user_ip: ip, user_agent: ua });
-      const r = await porFixie("https://search.api.careerjet.net/v4/query?" + q, { Authorization: auth, Accept: "application/json", "User-Agent": ua });
+      const r = await porFixie("https://search.api.careerjet.net/v4/query?" + q, { Authorization: auth, Accept: "application/json", "User-Agent": ua, Referer: referer });
       consultas++;
       const txt = r.text;
       if (!r.ok) throw new Error("HTTP " + r.status + " " + txt.slice(0, 200));
