@@ -1,9 +1,8 @@
 name: Motor de postulaciones
 
 on:
-  workflow_run:              # corre apenas el robot termina de traer las ofertas del día…
-    workflows: ["Actualizar ofertas"]
-    types: [completed]
+  schedule:
+    - cron: "30 3 * * 3"     # todos los martes a las 10:30 p. m. de Lima (miércoles 03:30 UTC)
   workflow_dispatch:         # botón para ejecutarlo a mano
     inputs:
       solo:
@@ -17,8 +16,6 @@ on:
 
 jobs:
   motor:
-    # …pero solo los lunes (el script lo revisa) y si el robot terminó bien
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,4 +31,3 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SOLO: ${{ github.event.inputs.solo }}
           FORZAR: ${{ github.event.inputs.forzar }}
-          EVENTO: ${{ github.event_name }}
