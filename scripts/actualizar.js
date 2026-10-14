@@ -1,6 +1,8 @@
-// Robot diario de la Bolsa Laboral DSA (tope: 15,000 ofertas)
-// Trae ofertas de Jooble (una clave por país), quita repetidas,
-// elimina las antiguas y deja como máximo MAX_OFERTAS en ofertas.json
+// Robot de la Bolsa Laboral DSA (tope: 15,000 ofertas) — corre día por medio
+// Fuentes: Jooble (una clave por país; clave gratuita = 500 solicitudes en total)
+//          Careerjet (secreto CAREERJET_KEY; careerjet.com.pe) y
+//          Get on Board (empleos tech de Latinoamérica, acceso público sin clave).
+// Quita repetidas, elimina las antiguas y deja como máximo MAX_OFERTAS en ofertas.json
 const fs = require("fs");
 
 const MAX_OFERTAS = 15000;   // tope de ofertas activas
@@ -70,6 +72,112 @@ function tipo(t) {
   return "Tiempo completo";
 }
 
+/* ---------------- Get on Board: público, sin clave ---------------- */
+// Búsquedas por área (empleos de tecnología, datos, IA y proyectos). Solo Perú o 100% remoto.
+const GOB_BUSQUEDAS = {
+  "Análisis de datos": ["analista de datos", "business intelligence", "power bi", "data analyst"],
+  "Inteligencia artificial": ["inteligencia artificial", "machine learning", "data scientist"],
+  "Control de proyectos": ["project manager", "jefe de proyectos"],
+  "Ingeniería": ["ingeniero de datos", "data engineer"],
+  "Gestión empresarial": ["analista de procesos", "operaciones"]
+};
+function sinHtml(t) { return String(t || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim(); }
+function gobModalidad(a) {
+  const m = String(a.remote_modality || "");
+  if (m === "fully_remote" || (a.remote && !m)) return "Remoto";
+  if (m.indexOf("hybrid") >= 0) return "Híbrido";
+  return "Presencial";
+}
+function gobEnPeru(a) {
+  const c = (a.countries || []).map(x => String(x).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase());
+  if (c.includes("peru")) return true;
+  /* 100% remoto abierto a cualquier país (sin lista de países) */
+  return gobModalidad(a) === "Remoto" && !c.length;
+}
+async function getOnBoard(mapa, ahora) {
+  let consultas = 0, nuevas = 0, vistas = new Set();
+  for (const [area, palabras] of Object.entries(GOB_BUSQUEDAS)) {
+    for (const palabra of palabras) {
+      try {
+        const url = "https://www.getonbrd.com/api/v0/search/jobs?per_page=50&page=1&expand=%5B%22company%22%5D&query=" + encodeURIComponent(palabra);
+        const r = await fetch(url, { headers: { Accept: "application/json" } });
+        consultas++;
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const j = await r.json();
+        for (const it of (j.data || [])) {
+          const a = it.attributes || {}, id = "gob-" + it.id;
+          if (vistas.has(id) || !gobEnPeru(a) || !a.title) continue;
+          vistas.add(id);
+          const previa = mapa.get(id);
+          if (!previa) nuevas++;
+          const emp = (((a.company || {}).data || {}).attributes || {}).name || "Empresa confidencial";
+          const remoto = gobModalidad(a) === "Remoto";
+          const lo = +a.min_salary || 0, hi = +a.max_salary || lo;
+          mapa.set(id, {
+            id, title: String(a.title).trim(), area, company: String(emp).trim(),
+            country: "Perú", city: remoto ? "Remoto" : "Perú",
+            mode: gobModalidad(a), type: tipo(a.title + " " + sinHtml(a.description)), src: "getonbrd.com",
+            link: (it.links && it.links.public_url) || ("https://www.getonbrd.com/jobs/" + it.id),
+            snippet: sinHtml([a.description, a.functions, a.desirable].join(" ")).slice(0, 600),
+            fecha: a.published_at ? new Date(a.published_at * 1000).toISOString() : ahora.toISOString(),
+            visto: ahora.toISOString(),
+            alta: previa ? (previa.alta || previa.visto) : ahora.toISOString(),
+            sal: lo ? { c: "US$", lo, hi } : null, usdMid: lo ? (lo + hi) / 2 : 0
+          });
+        }
+      } catch (e) { console.log(`Get on Board / ${palabra}: ${e.message}`); }
+      await new Promise(s => setTimeout(s, 1500));   /* sin apuro: no saturar su servidor */
+    }
+  }
+  return { consultas, nuevas };
+}
+
+/* ---------------- Careerjet: clave de publisher (CAREERJET_KEY) ---------------- */
+async function careerjet(mapa, ahora) {
+  const clave = process.env.CAREERJET_KEY;
+  if (!clave) { console.log("Careerjet: falta el secreto CAREERJET_KEY (se salta)"); return { consultas: 0, nuevas: 0 }; }
+  const auth = "Basic " + Buffer.from(clave + ":").toString("base64");
+  let ip = "127.0.0.1";
+  try { ip = (await (await fetch("https://api.ipify.org")).text()).trim() || ip; } catch (e) {}
+  const ua = "DSA-Bolsa-Laboral/1.0 (+https://dsainstituto.com)";
+  let consultas = 0, nuevas = 0, mostrado = false;
+  for (const [area, palabras] of Object.entries(AREAS)) {
+    for (const palabra of palabras) {
+      try {
+        const q = new URLSearchParams({ locale_code: "es_PE", keywords: palabra, location: "Perú", page_size: "50", page: "1",
+          sort: "date", user_ip: ip, user_agent: ua });
+        const r = await fetch("https://search.api.careerjet.net/v4/query?" + q, { headers: { Authorization: auth, Accept: "application/json" } });
+        consultas++;
+        const txt = await r.text();
+        if (!r.ok) throw new Error("HTTP " + r.status + " " + txt.slice(0, 200));
+        const j = JSON.parse(txt);
+        const jobs = j.jobs || j.results || (j.data && j.data.jobs) || [];
+        if (!mostrado) { console.log("Careerjet responde. Campos:", Object.keys(j).join(", "), "| ejemplo:", JSON.stringify(jobs[0] || {}).slice(0, 300)); mostrado = true; }
+        for (const o of jobs) {
+          const url = o.url || o.link; if (!url || !o.title) continue;
+          const id = "cj" + require("crypto").createHash("sha1").update(String(url)).digest("hex").slice(0, 20);
+          const previa = mapa.get(id);
+          if (!previa) nuevas++;
+          const texto = `${o.title} ${o.description || ""}`;
+          const s = salario(o.salary || "", "S/", 0.27);
+          const f = Date.parse(o.date || o.created || "");
+          mapa.set(id, {
+            id, title: String(o.title).replace(/<[^>]+>/g, "").trim(), area, company: String(o.company || "Empresa confidencial").trim(),
+            country: "Perú", city: String(o.locations || o.location || "Perú").split(",")[0].trim() || "Perú",
+            mode: modalidad(texto), type: tipo(texto), src: String(o.site || "careerjet.com.pe"),
+            link: url, snippet: String(o.description || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim(),
+            fecha: f ? new Date(f).toISOString() : ahora.toISOString(), visto: ahora.toISOString(),
+            alta: previa ? (previa.alta || previa.visto) : ahora.toISOString(),
+            sal: s ? s.sal : null, usdMid: s ? s.usdMid : 0
+          });
+        }
+      } catch (e) { console.log(`Careerjet / ${palabra}: ${e.message}`); }
+      await new Promise(s => setTimeout(s, 1200));
+    }
+  }
+  return { consultas, nuevas };
+}
+
 async function consultar(clave, dominio, palabra, pais, pagina) {
   const r = await fetch(`https://${dominio}.jooble.org/api/${clave}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -119,6 +227,14 @@ async function consultar(clave, dominio, palabra, pais, pagina) {
      }
     }
   }
+
+  /* Careerjet (si falla, la bolsa sigue con las demás fuentes) */
+  try { const c = await careerjet(mapa, ahora); consultas += c.consultas; nuevas += c.nuevas; console.log(`Careerjet: ${c.nuevas} nuevas`); }
+  catch (e) { console.log("Careerjet no respondió: " + e.message); }
+
+  /* Get on Board (si falla, la bolsa sigue con lo de Jooble) */
+  try { const g = await getOnBoard(mapa, ahora); consultas += g.consultas; nuevas += g.nuevas; console.log(`Get on Board: ${g.nuevas} nuevas`); }
+  catch (e) { console.log("Get on Board no respondió: " + e.message); }
 
   const limite = ahora.getTime() - DIAS_MAXIMO * 864e5;
   const sinVer = ahora.getTime() - 30 * 864e5; // no apareció en 30 días: se asume cerrada
