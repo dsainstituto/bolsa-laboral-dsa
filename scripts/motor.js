@@ -25,6 +25,7 @@ const SOLO = String(process.env.SOLO || '').trim().toLowerCase();
 const FORZAR = /^s/i.test(String(process.env.FORZAR || ''));
 const DIA = 86400000;
 const DIAS_MAX = 20;            // las ofertas se borran a los 20 días (sus números quedan en "acum")
+const DIAS_OFERTA = 20;         // solo se reparten ofertas publicadas hace 20 días o menos
 
 /* ---------------- utilidades ---------------- */
 const espera = ms => new Promise(r => setTimeout(r, ms));
@@ -216,7 +217,7 @@ function nuevaOferta(o, afin, motivo, lunes, ahora) {
   return { id: 'o' + String(o.id).replace(/[^A-Za-z0-9-]/g, ''), ref: String(o.id), puesto: String(o.title || '').slice(0, 140),
     empresa: String(o.company || 'Empresa confidencial').slice(0, 100), ciudad: limpiarCiudad(o.city).slice(0, 60),
     modalidad: String(o.mode || '').slice(0, 30), portal: portalDe(o.src), url: String(o.link || ''), match: afin,
-    publicada: String(o.fecha || '').slice(0, 30),   /* fecha en que la empresa publicó la oferta */
+    publicada: (Date.parse(o.fecha || '') ? new Date(Date.parse(o.fecha)).toISOString() : ''),   /* fecha en que la empresa publicó la oferta */
     motivo: motivo || '', sem: lunes, estado: 'pendiente', hist: [{ e: 'seleccionada', t: ahora, por: 'Sistema DSA' }] };
 }
 
@@ -228,7 +229,8 @@ async function procesar(a, ofertas, lunes, ahora) {
     if (!FORZAR && ya.some(o => o.sem === lunes && o.hist && o.hist[0] && o.hist[0].por === 'Sistema DSA')) return 'ya-tenía';
     const usadas = new Set(ya.map(o => o.ref || o.id).concat(pod.usadas));
     const pf = perfilDe(a, prev.data);
-    const libres = ofertas.filter(o => !usadas.has(String(o.id)) && o.link);
+    const reciente = ahora - DIAS_OFERTA * DIA;
+    const libres = ofertas.filter(o => !usadas.has(String(o.id)) && o.link && (Date.parse(o.fecha || o.alta || '') || 0) >= reciente);
     const orden = libres.map(o => ({ o, s: puntaje(o, pf) })).filter(x => x.s > 0).sort((x, y) => y.s - x.s);
     if (!orden.length) return 'sin-coincidencias';
     const cands = orden.slice(0, CANDIDATAS).map(x => x.o);
