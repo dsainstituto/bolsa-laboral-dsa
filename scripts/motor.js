@@ -24,6 +24,8 @@ const BASE = `https://firestore.googleapis.com/v1/projects/${PROYECTO}/databases
 const SOLO = String(process.env.SOLO || '').trim().toLowerCase();
 const FORZAR = /^s/i.test(String(process.env.FORZAR || ''));
 const DIA = 86400000;
+const DIAS_MAX = 20;            // las ofertas se borran a los 20 días (sus números quedan en "acum")
+const ESTADOS_VISTA = ['visto', 'evaluacion', 'entrevista', 'finalizado', 'aceptado'];   // igual que en el campus
 
 /* ---------------- utilidades ---------------- */
 const espera = ms => new Promise(r => setTimeout(r, ms));
@@ -118,15 +120,32 @@ async function leerPost(id) {
   if (!r.ok) throw new Error('No se pudo leer postulaciones/' + id);
   return { existe: true, data: docObj(j), updateTime: j.updateTime };
 }
-async function guardarPost(id, ofertas, previo) {
+async function guardarPost(id, ofertas, previo, extra = {}) {
   const q = new URLSearchParams();
-  q.append('updateMask.fieldPaths', 'ofertas'); q.append('updateMask.fieldPaths', 'actualizado');
+  const campos = { ofertas, actualizado: Date.now(), ...extra };
+  Object.keys(campos).forEach(k => q.append('updateMask.fieldPaths', k));
   if (previo.existe) q.set('currentDocument.updateTime', previo.updateTime); else q.set('currentDocument.exists', 'false');
+  const fields = {}; Object.keys(campos).forEach(k => { fields[k] = aFs(campos[k]); });
   const r = await fsPedir(`${BASE}/postulaciones/${encodeURIComponent(id)}?${q}`, { method: 'PATCH',
-    body: JSON.stringify({ fields: { ofertas: aFs(ofertas), actualizado: aFs(Date.now()) } }) });
+    body: JSON.stringify({ fields }) });
   if (r.status === 400 || r.status === 409 || r.status === 412) return false;   /* alguien lo cambió justo ahora: se reintenta */
   if (!r.ok) throw new Error('No se pudo guardar postulaciones/' + id + ': ' + (await r.text()).slice(0, 200));
   return true;
+}
+
+/* ---------------- borrar ofertas de más de 20 días ---------------- */
+function podar(ofertas, acum, usadas, ahora) {
+  const limite = ahora - DIAS_MAX * DIA, A = { post: +(acum || {}).post || 0, vistas: +(acum || {}).vistas || 0, entrev: +(acum || {}).entrev || 0 };
+  const U = (usadas || []).slice(), quedan = [];
+  for (const o of ofertas) {
+    const edad = (o.hist && o.hist[0] && o.hist[0].t) || o.sem || 0;
+    if (edad >= limite) { quedan.push(o); continue; }
+    if (o.estado !== 'pendiente') A.post++;
+    if (ESTADOS_VISTA.includes(o.estado)) A.vistas++;
+    if ((o.hist || []).some(h => h.e === 'entrevista')) A.entrev++;
+    U.push(String(o.ref || o.id));
+  }
+  return { ofertas: quedan, acum: A, usadas: U.slice(-1500) };
 }
 
 /* ---------------- elegir ofertas ---------------- */
@@ -134,7 +153,7 @@ function perfilDe(a, post) {
   const p = (a.postu && a.postu.prefs) || {};
   const ats = post.cvAts || {};
   return {
-    puestos: String(p.puestos || ''), ciudad: String(p.ciudad || ''), modalidad: String(p.modalidad || ''), sueldo: String(p.sueldo || ''),
+    puestos: String(p.puestos || ''), ciudad: String(p.ciudad || ''), modalidad: String(p.modalidad || ''),
     carrera: String(a.carrera || a.rubro || ''), cargo: String(a.cargo || ''),
     resumen: String(ats.resumen || '').slice(0, 600),
     habilidades: (ats.habilidades || []).slice(0, 25).join(', '),
@@ -149,10 +168,13 @@ function puntaje(of, pf) {
   extra.forEach(w => { if (tit.includes(w)) s += 2; else if (sn.includes(w)) s += 1; });
   /* frase completa del puesto dentro del título */
   pf.puestos.split(',').map(x => sinTildes(x).trim()).filter(x => x.length > 3).forEach(f => { if (sinTildes(of.title).includes(f)) s += 10; });
-  const ciu = sinTildes(pf.ciudad), oc = sinTildes(of.city);
-  if (ciu && oc && oc !== 'peru') s += (oc.includes(ciu) || (ciu === 'lima' && LIMA.some(d => oc.includes(d)))) ? 3 : -4;
-  const mod = sinTildes(pf.modalidad);
-  if (mod && mod !== 'cualquiera' && sinTildes(of.mode) && !sinTildes(of.mode).includes(mod.slice(0, 5))) s -= 2;
+  /* el alumno puede elegir varias ciudades y varias modalidades (separadas por comas) */
+  const cius = String(pf.ciudad || '').split(',').map(x => sinTildes(x).trim()).filter(Boolean), oc = sinTildes(of.city);
+  if (cius.length && oc && oc !== 'peru')
+    s += cius.some(ciu => oc.includes(ciu) || ((ciu === 'lima' || ciu === 'callao') && LIMA.some(d => oc.includes(d)))) ? 3 : -4;
+  const mods = String(pf.modalidad || '').split(',').map(x => sinTildes(x).trim()).filter(x => x && x !== 'cualquiera');
+  const om = sinTildes(of.mode);
+  if (mods.length && om && !mods.some(m => om.includes(m.slice(0, 5)))) s -= 2;
   return s;
 }
 const LIMA = ['lima', 'san isidro', 'surco', 'miraflores', 'ate', 'san borja', 'la molina', 'callao', 'jesus maria', 'lince', 'san miguel',
@@ -195,9 +217,10 @@ function nuevaOferta(o, afin, motivo, lunes, ahora) {
 async function procesar(a, ofertas, lunes, ahora) {
   for (let intento = 0; intento < 3; intento++) {
     const prev = await leerPost(a.id);
-    const ya = prev.data.ofertas || [];
+    const pod = podar(prev.data.ofertas || [], prev.data.acum, prev.data.usadas, ahora);
+    const ya = pod.ofertas;
     if (!FORZAR && ya.some(o => o.sem === lunes && o.hist && o.hist[0] && o.hist[0].por === 'Sistema DSA')) return 'ya-tenía';
-    const usadas = new Set(ya.map(o => o.ref || o.id));
+    const usadas = new Set(ya.map(o => o.ref || o.id).concat(pod.usadas));
     const pf = perfilDe(a, prev.data);
     const libres = ofertas.filter(o => !usadas.has(String(o.id)) && o.link);
     const orden = libres.map(o => ({ o, s: puntaje(o, pf) })).filter(x => x.s > 0).sort((x, y) => y.s - x.s);
@@ -212,7 +235,7 @@ async function procesar(a, ofertas, lunes, ahora) {
     const nuevas = elegidas.slice(0, POR_SEMANA).map(x => nuevaOferta(porId.get(x.id), x.afinidad, x.motivo, lunes, ahora)).filter(o => o.url);
     /* si se fuerza, se reemplazan las de esta semana que aún no se postularon */
     const base = FORZAR ? ya.filter(o => !(o.sem === lunes && o.estado === 'pendiente')) : ya;
-    const ok = await guardarPost(a.id, base.concat(nuevas), prev);
+    const ok = await guardarPost(a.id, base.concat(nuevas), prev, { acum: pod.acum, usadas: pod.usadas });
     if (ok) return nuevas.length + ' ofertas';
     await espera(1000);
   }
