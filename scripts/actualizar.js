@@ -133,47 +133,91 @@ async function getOnBoard(mapa, ahora) {
 }
 
 /* ---------------- Careerjet: clave de publisher (CAREERJET_KEY) ---------------- */
+/* Careerjet solo acepta IPs fijas, así que sus consultas salen por Fixie (secreto FIXIE_URL).
+   El plan gratis de Fixie da 500 consultas al mes: el robot corre ~16 veces al mes,
+   así que se hacen CJ_POR_CORRIDA consultas por vez (~416 al mes). */
+const CJ_POR_CORRIDA = 26;
+function porFixie(url, headers) {
+  /* GET https a través del proxy de Fixie (túnel CONNECT), sin librerías extra */
+  const http = require("http"), https = require("https"), tls = require("tls");
+  const px = new URL(process.env.FIXIE_URL), destino = new URL(url);
+  const cabeceraProxy = px.username
+    ? { "Proxy-Authorization": "Basic " + Buffer.from(decodeURIComponent(px.username) + ":" + decodeURIComponent(px.password)).toString("base64") }
+    : {};
+  return new Promise((ok, mal) => {
+    const c = http.request({ host: px.hostname, port: px.port || 80, method: "CONNECT",
+      path: destino.hostname + ":443", headers: { Host: destino.hostname + ":443", ...cabeceraProxy } });
+    c.setTimeout(30000, () => c.destroy(new Error("Fixie no responde")));
+    c.on("connect", (res, socket) => {
+      if (res.statusCode !== 200) { socket.destroy(); return mal(new Error("Fixie rechazó la conexión (HTTP " + res.statusCode + ")")); }
+      const segura = tls.connect({ socket, servername: destino.hostname });
+      const r = https.request({ host: destino.hostname, path: destino.pathname + destino.search, method: "GET",
+        headers, createConnection: () => segura }, resp => {
+        let txt = ""; resp.setEncoding("utf8");
+        resp.on("data", d => txt += d);
+        resp.on("end", () => ok({ ok: resp.statusCode < 300, status: resp.statusCode, text: txt }));
+      });
+      r.setTimeout(30000, () => r.destroy(new Error("Careerjet no responde")));
+      r.on("error", mal); r.end();
+    });
+    c.on("error", mal); c.end();
+  });
+}
+function cjBusquedas(ahora) {
+  /* siempre la primera palabra de cada área + otras que van rotando en cada corrida */
+  const fijas = [], resto = [];
+  for (const [area, palabras] of Object.entries(AREAS)) palabras.forEach((p, i) => (i ? resto : fijas).push([area, p]));
+  const cupo = Math.max(0, CJ_POR_CORRIDA - fijas.length);
+  const vuelta = Math.floor(ahora.getTime() / 86400000 / 2);
+  const extra = [];
+  for (let i = 0; i < Math.min(cupo, resto.length); i++) extra.push(resto[(vuelta * cupo + i) % resto.length]);
+  return fijas.concat(extra).slice(0, CJ_POR_CORRIDA);
+}
 async function careerjet(mapa, ahora) {
   const clave = process.env.CAREERJET_KEY;
   if (!clave) { console.log("Careerjet: falta el secreto CAREERJET_KEY (se salta)"); return { consultas: 0, nuevas: 0 }; }
+  if (!process.env.FIXIE_URL) { console.log("Careerjet: falta el secreto FIXIE_URL (se salta)"); return { consultas: 0, nuevas: 0 }; }
   const auth = "Basic " + Buffer.from(clave + ":").toString("base64");
   let ip = "127.0.0.1";
   try { ip = (await (await fetch("https://api.ipify.org")).text()).trim() || ip; } catch (e) {}
   const ua = "DSA-Bolsa-Laboral/1.0 (+https://dsainstituto.com)";
-  let consultas = 0, nuevas = 0, mostrado = false;
-  for (const [area, palabras] of Object.entries(AREAS)) {
-    for (const palabra of palabras) {
-      try {
-        const q = new URLSearchParams({ locale_code: "es_PE", keywords: palabra, location: "Perú", page_size: "50", page: "1",
-          sort: "date", user_ip: ip, user_agent: ua });
-        const r = await fetch("https://search.api.careerjet.net/v4/query?" + q, { headers: { Authorization: auth, Accept: "application/json" } });
-        consultas++;
-        const txt = await r.text();
-        if (!r.ok) throw new Error("HTTP " + r.status + " " + txt.slice(0, 200));
-        const j = JSON.parse(txt);
-        const jobs = j.jobs || j.results || (j.data && j.data.jobs) || [];
-        if (!mostrado) { console.log("Careerjet responde. Campos:", Object.keys(j).join(", "), "| ejemplo:", JSON.stringify(jobs[0] || {}).slice(0, 300)); mostrado = true; }
-        for (const o of jobs) {
-          const url = o.url || o.link; if (!url || !o.title) continue;
-          const id = "cj" + require("crypto").createHash("sha1").update(String(url)).digest("hex").slice(0, 20);
-          const previa = mapa.get(id);
-          if (!previa) nuevas++;
-          const texto = `${o.title} ${o.description || ""}`;
-          const s = salario(o.salary || "", "S/", 0.27);
-          const f = Date.parse(o.date || o.created || "");
-          mapa.set(id, {
-            id, title: String(o.title).replace(/<[^>]+>/g, "").trim(), area, company: String(o.company || "Empresa confidencial").trim(),
-            country: "Perú", city: String(o.locations || o.location || "Perú").split(",")[0].trim() || "Perú",
-            mode: modalidad(texto), type: tipo(texto), src: String(o.site || "careerjet.com.pe"),
-            link: url, snippet: String(o.description || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim(),
-            fecha: f ? new Date(f).toISOString() : ahora.toISOString(), visto: ahora.toISOString(),
-            alta: previa ? (previa.alta || previa.visto) : ahora.toISOString(),
-            sal: s ? s.sal : null, usdMid: s ? s.usdMid : 0
-          });
-        }
-      } catch (e) { console.log(`Careerjet / ${palabra}: ${e.message}`); }
-      await new Promise(s => setTimeout(s, 1200));
+  let consultas = 0, nuevas = 0, mostrado = false, fallos = 0;
+  for (const [area, palabra] of cjBusquedas(ahora)) {
+    try {
+      const q = new URLSearchParams({ locale_code: "es_PE", keywords: palabra, location: "Perú", page_size: "50", page: "1",
+        sort: "date", user_ip: ip, user_agent: ua });
+      const r = await porFixie("https://search.api.careerjet.net/v4/query?" + q, { Authorization: auth, Accept: "application/json", "User-Agent": ua });
+      consultas++;
+      const txt = r.text;
+      if (!r.ok) throw new Error("HTTP " + r.status + " " + txt.slice(0, 200));
+      fallos = 0;
+      const j = JSON.parse(txt);
+      const jobs = j.jobs || j.results || (j.data && j.data.jobs) || [];
+      if (!mostrado) { console.log("Careerjet responde. Campos:", Object.keys(j).join(", "), "| ejemplo:", JSON.stringify(jobs[0] || {}).slice(0, 300)); mostrado = true; }
+      for (const o of jobs) {
+        const url = o.url || o.link; if (!url || !o.title) continue;
+        const id = "cj" + require("crypto").createHash("sha1").update(String(url)).digest("hex").slice(0, 20);
+        const previa = mapa.get(id);
+        if (!previa) nuevas++;
+        const texto = `${o.title} ${o.description || ""}`;
+        const s = salario(o.salary || "", "S/", 0.27);
+        const f = Date.parse(o.date || o.created || "");
+        mapa.set(id, {
+          id, title: String(o.title).replace(/<[^>]+>/g, "").trim(), area, company: String(o.company || "Empresa confidencial").trim(),
+          country: "Perú", city: String(o.locations || o.location || "Perú").split(",")[0].trim() || "Perú",
+          mode: modalidad(texto), type: tipo(texto), src: String(o.site || "careerjet.com.pe"),
+          link: url, snippet: String(o.description || "").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim(),
+          fecha: f ? new Date(f).toISOString() : ahora.toISOString(), visto: ahora.toISOString(),
+          alta: previa ? (previa.alta || previa.visto) : ahora.toISOString(),
+          sal: s ? s.sal : null, usdMid: s ? s.usdMid : 0
+        });
+      }
+    } catch (e) {
+      console.log(`Careerjet / ${palabra}: ${e.message}`);
+      /* si falla 3 veces seguidas (IP no autorizada, cupo de Fixie agotado...), no gastar más consultas */
+      if (++fallos >= 3) { console.log("Careerjet: 3 fallos seguidos, se detiene por hoy"); break; }
     }
+    await new Promise(s => setTimeout(s, 1200));
   }
   return { consultas, nuevas };
 }
