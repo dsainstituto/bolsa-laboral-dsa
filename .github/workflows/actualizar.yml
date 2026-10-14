@@ -20,6 +20,7 @@ jobs:
         run: node scripts/actualizar.js
         env:
           CAREERJET_KEY: ${{ secrets.CAREERJET_KEY }}
+          FIXIE_URL: ${{ secrets.FIXIE_URL }}
           JOOBLE_PE: ${{ secrets.JOOBLE_PE }}
           JOOBLE_MX: ${{ secrets.JOOBLE_MX }}
           JOOBLE_CO: ${{ secrets.JOOBLE_CO }}
