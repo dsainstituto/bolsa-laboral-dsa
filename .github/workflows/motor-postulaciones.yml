@@ -1,0 +1,37 @@
+name: Motor de postulaciones
+
+on:
+  workflow_run:              # corre apenas el robot termina de traer las ofertas del día…
+    workflows: ["Actualizar ofertas"]
+    types: [completed]
+  workflow_dispatch:         # botón para ejecutarlo a mano
+    inputs:
+      solo:
+        description: "Correo de un alumno (vacío = todos)"
+        required: false
+        default: ""
+      forzar:
+        description: "Volver a elegir aunque ya tenga ofertas esta semana (si / no)"
+        required: false
+        default: "no"
+
+jobs:
+  motor:
+    # …pero solo los lunes (el script lo revisa) y si el robot terminó bien
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Elegir las ofertas de cada alumno
+        run: node scripts/motor.js
+        env:
+          CAMPUS_SA: ${{ secrets.CAMPUS_SA }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SOLO: ${{ github.event.inputs.solo }}
+          FORZAR: ${{ github.event.inputs.forzar }}
+          EVENTO: ${{ github.event_name }}
