@@ -1,6 +1,6 @@
 /* =====================================================================
    MOTOR DE POSTULACIONES DSA
-   Cada lunes, después de que el robot trae las ofertas del día
+   Cada martes a las 10:30 p. m. (Lima), con las ofertas del día
    (ofertas.json), elige para cada alumno las 20 que más le convienen y
    las deja en su campus (colección postulaciones/{alumnoId}).
 
@@ -31,10 +31,10 @@ function sinTildes(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]
 const VACIAS = new Set(('de del la las el los y e o u en con para por a al un una sus su se que como mas sr jr '
   + 'analista asistente especialista junior senior practicante practicas gestion area').split(' '));
 function palabras(s) { return sinTildes(s).split(/[^a-z0-9+#]+/).filter(w => w.length > 2 && !VACIAS.has(w)); }
-/* lunes 00:00 de Lima (UTC-5) de la semana actual, en milisegundos */
+/* inicio de la tanda semanal: martes 00:00 de Lima (UTC-5), en milisegundos */
 function lunesLima(ahora) {
   const l = new Date((ahora || Date.now()) - 5 * 3600000);
-  const dow = (l.getUTCDay() + 6) % 7;
+  const dow = (l.getUTCDay() + 5) % 7;   /* martes = 0 */
   return Date.UTC(l.getUTCFullYear(), l.getUTCMonth(), l.getUTCDate() - dow) + 5 * 3600000;
 }
 function portalDe(src) {
@@ -231,10 +231,6 @@ function elegible(a, ahora) {
 }
 
 async function main() {
-  if (process.env.EVENTO === 'workflow_run') {
-    const diaLima = new Date(Date.now() - 5 * 3600000).getUTCDay();
-    if (diaLima !== 1) { console.log('Hoy no es lunes: el motor solo elige ofertas los lunes.'); return; }
-  }
   if (!process.env.CAMPUS_SA) { console.log('Falta el secreto CAMPUS_SA. Agrégalo en Settings > Secrets and variables > Actions.'); process.exit(1); }
   if (!process.env.ANTHROPIC_API_KEY) console.log('Aviso: falta ANTHROPIC_API_KEY; se elegirá solo por palabras clave.');
   const archivo = path.join(__dirname, '..', 'ofertas.json');
