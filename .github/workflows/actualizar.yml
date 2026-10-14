@@ -2,7 +2,7 @@ name: Actualizar ofertas
 
 on:
   schedule:
-    - cron: "0 11 * * *"   # todos los días a las 6:00 a. m. de Lima
+    - cron: "0 11 */2 * *" # día por medio a las 6:00 a. m. de Lima (ahorra la clave de Jooble)
   workflow_dispatch:        # botón para ejecutarlo a mano
 
 permissions:
@@ -19,6 +19,7 @@ jobs:
       - name: Traer ofertas
         run: node scripts/actualizar.js
         env:
+          CAREERJET_KEY: ${{ secrets.CAREERJET_KEY }}
           JOOBLE_PE: ${{ secrets.JOOBLE_PE }}
           JOOBLE_MX: ${{ secrets.JOOBLE_MX }}
           JOOBLE_CO: ${{ secrets.JOOBLE_CO }}
