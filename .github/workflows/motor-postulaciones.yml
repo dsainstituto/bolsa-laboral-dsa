@@ -2,7 +2,7 @@ name: Motor de postulaciones
 
 on:
   schedule:
-    - cron: "30 3 * * 3"     # todos los martes a las 10:30 p. m. de Lima (miércoles 03:30 UTC)
+    - cron: "0 8 * * 4"      # todos los jueves a las 3:00 a. m. de Lima (jueves 08:00 UTC)
   workflow_dispatch:         # botón para ejecutarlo a mano
     inputs:
       solo:
