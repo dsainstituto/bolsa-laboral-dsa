@@ -25,7 +25,6 @@ const SOLO = String(process.env.SOLO || '').trim().toLowerCase();
 const FORZAR = /^s/i.test(String(process.env.FORZAR || ''));
 const DIA = 86400000;
 const DIAS_MAX = 20;            // las ofertas se borran a los 20 días (sus números quedan en "acum")
-const ESTADOS_VISTA = ['visto', 'evaluacion', 'entrevista', 'finalizado', 'aceptado'];   // igual que en el campus
 
 /* ---------------- utilidades ---------------- */
 const espera = ms => new Promise(r => setTimeout(r, ms));
@@ -135,16 +134,22 @@ async function guardarPost(id, ofertas, previo, extra = {}) {
 
 /* ---------------- borrar ofertas de más de 20 días ---------------- */
 function podar(ofertas, acum, usadas, ahora) {
-  const limite = ahora - DIAS_MAX * DIA, A = { post: +(acum || {}).post || 0, vistas: +(acum || {}).vistas || 0, entrev: +(acum || {}).entrev || 0 };
+  const ac = acum || {}, limite = ahora - DIAS_MAX * DIA;
+  const A = { post: +ac.post || 0, elegidas: +ac.elegidas || 0, afinS: +ac.afinS || 0, afinN: +ac.afinN || 0, empresas: (ac.empresas || []).slice() };
   const U = (usadas || []).slice(), quedan = [];
   for (const o of ofertas) {
     const edad = (o.hist && o.hist[0] && o.hist[0].t) || o.sem || 0;
     if (edad >= limite) { quedan.push(o); continue; }
-    if (o.estado !== 'pendiente') A.post++;
-    if (ESTADOS_VISTA.includes(o.estado)) A.vistas++;
-    if ((o.hist || []).some(h => h.e === 'entrevista')) A.entrev++;
+    A.elegidas++;
+    if (o.match) { A.afinS += +o.match || 0; A.afinN++; }
+    if (o.estado !== 'pendiente') {
+      A.post++;
+      const em = String(o.empresa || '').trim().toLowerCase();
+      if (em && em !== 'empresa confidencial' && !A.empresas.includes(em)) A.empresas.push(em);
+    }
     U.push(String(o.ref || o.id));
   }
+  A.empresas = A.empresas.slice(-500);
   return { ofertas: quedan, acum: A, usadas: U.slice(-1500) };
 }
 
@@ -211,6 +216,7 @@ function nuevaOferta(o, afin, motivo, lunes, ahora) {
   return { id: 'o' + String(o.id).replace(/[^A-Za-z0-9-]/g, ''), ref: String(o.id), puesto: String(o.title || '').slice(0, 140),
     empresa: String(o.company || 'Empresa confidencial').slice(0, 100), ciudad: limpiarCiudad(o.city).slice(0, 60),
     modalidad: String(o.mode || '').slice(0, 30), portal: portalDe(o.src), url: String(o.link || ''), match: afin,
+    publicada: String(o.fecha || '').slice(0, 30),   /* fecha en que la empresa publicó la oferta */
     motivo: motivo || '', sem: lunes, estado: 'pendiente', hist: [{ e: 'seleccionada', t: ahora, por: 'Sistema DSA' }] };
 }
 
